@@ -37,8 +37,24 @@ func NewCache(size int) (cache *Cache) {
 	return NewCacheCustomTimer(size, defaultTimer{})
 }
 
+// NewCacheEvictionCallback returns a newly initialize cache by size.
+// The cache size will be set to 512KB at minimum.
+// If the size is set relatively large, you should call
+// `debug.SetGCPercent()`, set it to a much smaller value
+// to limit the memory consumption and GC pause time.
+// Also sets the evictionCallback at segment level. The eviction callback is invoked
+// with the value of th evicted key.
+func NewCacheEvictionCallback(size int, evictionCallback func(value []byte)) (cache *Cache) {
+	return NewCacheCustomTimerWithEvictionCallback(size, defaultTimer{}, evictionCallback)
+}
+
 // NewCacheCustomTimer returns new cache with custom timer.
 func NewCacheCustomTimer(size int, timer Timer) (cache *Cache) {
+	return NewCacheCustomTimerWithEvictionCallback(size, timer, nil)
+}
+
+// NewCacheCustomTimerWithEvictionCallback returns new cache with custom timer and sets the evictionCallback at segment level.
+func NewCacheCustomTimerWithEvictionCallback(size int, timer Timer, evictionCallback func(value []byte)) (cache *Cache) {
 	if size < minBufSize {
 		size = minBufSize
 	}
@@ -47,7 +63,7 @@ func NewCacheCustomTimer(size int, timer Timer) (cache *Cache) {
 	}
 	cache = new(Cache)
 	for i := 0; i < segmentCount; i++ {
-		cache.segments[i] = newSegment(size/segmentCount, i, timer)
+		cache.segments[i] = newSegmentEvictionCallback(size/segmentCount, i, timer, evictionCallback)
 	}
 	return
 }

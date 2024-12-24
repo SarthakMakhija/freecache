@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	mrand "math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -254,6 +255,67 @@ func TestExpire(t *testing.T) {
 	cache.ResetStatistics()
 	if cache.ExpiredCount() != 0 {
 		t.Error("expired count should be zero.")
+	}
+}
+
+func TestExpiryWithEvictionCallback(t *testing.T) {
+	var evictedValues [][]byte
+	cache := NewCacheEvictionCallback(1024, func(value []byte) {
+		evictedValues = append(evictedValues, value)
+	})
+	key := []byte("abcd")
+	val := []byte("efgh")
+	err := cache.Set(key, val, 1)
+	if err != nil {
+		t.Error("err should be nil")
+	}
+	time.Sleep(time.Second)
+	cachedVal, err := cache.Get(key)
+	if err == nil {
+		t.Fatal("key should be expired", string(cachedVal))
+	}
+	if len(evictedValues) != 1 {
+		t.Error("evictedValues should have length 1")
+	}
+	if !bytes.Equal(evictedValues[0], val) {
+		t.Error(fmt.Sprintf("evictedValues[0] should have %v but was %v", string(val), string(evictedValues[0])))
+	}
+
+	cache.ResetStatistics()
+	if cache.ExpiredCount() != 0 {
+		t.Error("expired count should be zero.")
+	}
+}
+
+func TestExpiryWithEvictionCallbackResultingInEvictionOfACoupleOfKeys(t *testing.T) {
+	var evictedValues [][]byte
+	cache := NewCacheEvictionCallback(1024, func(value []byte) {
+		evictedValues = append(evictedValues, value)
+	})
+	err := cache.Set([]byte("consensus"), []byte("raft"), 1)
+	if err != nil {
+		t.Error("err should be nil")
+	}
+	err = cache.Set([]byte("distributed"), []byte("etcd"), 1)
+	if err != nil {
+		t.Error("err should be nil")
+	}
+	time.Sleep(time.Second * 3)
+
+	_, _ = cache.Get([]byte("consensus"))
+	_, _ = cache.Get([]byte("distributed"))
+
+	sort.Slice(evictedValues, func(i, j int) bool {
+		return bytes.Compare(evictedValues[i], evictedValues[j]) < 0
+	})
+	if len(evictedValues) != 2 {
+		t.Error("evictedValues should have length 2")
+	}
+	if !bytes.Equal(evictedValues[0], []byte("etcd")) {
+		t.Error(fmt.Sprintf("evictedValues[0] should have %v but was %v", "etcd", string(evictedValues[0])))
+	}
+	if !bytes.Equal(evictedValues[1], []byte("raft")) {
+		t.Error(fmt.Sprintf("evictedValues[1] should have %v but was %v", "raft", string(evictedValues[1])))
 	}
 }
 

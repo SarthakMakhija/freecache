@@ -37,32 +37,38 @@ type entryHdr struct {
 // a segment contains 256 slots, a slot is an array of entry pointers ordered by hash16 value
 // the entry can be looked up by hash value of the key.
 type segment struct {
-	rb            RingBuf // ring buffer that stores data
-	segId         int
-	_             uint32
-	missCount     int64
-	hitCount      int64
-	entryCount    int64
-	totalCount    int64      // number of entries in ring buffer, including deleted entries.
-	totalTime     int64      // used to calculate least recent used entry.
-	timer         Timer      // Timer giving current time
-	totalEvacuate int64      // used for debug
-	totalExpired  int64      // used for debug
-	overwrites    int64      // used for debug
-	touched       int64      // used for debug
-	vacuumLen     int64      // up to vacuumLen, new data can be written without overwriting old data.
-	slotLens      [256]int32 // The actual length for every slot.
-	slotCap       int32      // max number of entry pointers a slot can hold.
-	slotsData     []entryPtr // shared by all 256 slots
+	rb               RingBuf // ring buffer that stores data
+	segId            int
+	_                uint32
+	missCount        int64
+	hitCount         int64
+	entryCount       int64
+	totalCount       int64      // number of entries in ring buffer, including deleted entries.
+	totalTime        int64      // used to calculate least recent used entry.
+	timer            Timer      // Timer giving current time
+	totalEvacuate    int64      // used for debug
+	totalExpired     int64      // used for debug
+	overwrites       int64      // used for debug
+	touched          int64      // used for debug
+	vacuumLen        int64      // up to vacuumLen, new data can be written without overwriting old data.
+	slotLens         [256]int32 // The actual length for every slot.
+	slotCap          int32      // max number of entry pointers a slot can hold.
+	slotsData        []entryPtr // shared by all 256 slots
+	evictionCallback func(value []byte)
 }
 
-func newSegment(bufSize int, segId int, timer Timer) (seg segment) {
+func newSegment(bufSize int, segId int, timer Timer) segment {
+	return newSegmentEvictionCallback(bufSize, segId, timer, nil)
+}
+
+func newSegmentEvictionCallback(bufSize int, segId int, timer Timer, evictionCallback func(value []byte)) (seg segment) {
 	seg.rb = NewRingBuf(bufSize, 0)
 	seg.segId = segId
 	seg.timer = timer
 	seg.vacuumLen = int64(bufSize)
 	seg.slotCap = 1
 	seg.slotsData = make([]entryPtr, 256*seg.slotCap)
+	seg.evictionCallback = evictionCallback
 	return
 }
 
@@ -394,6 +400,14 @@ func (seg *segment) delEntryPtr(slotId uint8, slot []entryPtr, idx int) {
 	seg.rb.ReadAt(entryHdrBuf[:], offset)
 	entryHdr := (*entryHdr)(unsafe.Pointer(&entryHdrBuf[0]))
 	entryHdr.deleted = true
+	if seg.evictionCallback != nil {
+		buffer := make([]byte, entryHdr.valLen)
+		_, err := seg.rb.ReadAt(buffer, offset+ENTRY_HDR_SIZE+int64(entryHdr.keyLen))
+		if err != nil {
+			panic(err)
+		}
+		seg.evictionCallback(buffer)
+	}
 	seg.rb.WriteAt(entryHdrBuf[:], offset)
 	copy(slot[idx:], slot[idx+1:])
 	seg.slotLens[slotId]--
